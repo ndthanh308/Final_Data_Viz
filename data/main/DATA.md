@@ -1,309 +1,309 @@
-# Dataset Blueprint: E-Commerce Fashion Operations
+# Bản thiết kế bộ dữ liệu: Vận hành thương mại điện tử ngành thời trang
 
-## 1. Dataset Overview
+## 1. Tổng quan bộ dữ liệu
 
-* **Business Context:** Simulates the operations of an e-commerce fashion business in Vietnam.
-* **Time Range:** * Training: 04/07/2012 to 31/12/2022
-    * Testing: 01/01/2023 to 01/07/2024
-* **Data Split:** `sales_train.csv` vs `sales_test.csv`
-* **Data Domains:**
+* **Bối cảnh kinh doanh:** Mô phỏng hoạt động của một doanh nghiệp thương mại điện tử ngành thời trang tại Việt Nam.
+* **Khoảng thời gian:** * Huấn luyện: 04/07/2012 đến 31/12/2022
+    * Kiểm thử: 01/01/2023 đến 01/07/2024
+* **Phân chia dữ liệu:** `sales_train.csv` so với `sales_test.csv`
+* **Nhóm dữ liệu:**
     * **Master:** `products.csv`, `customers.csv`, `promotions.csv`, `geography.csv`
-    * **Transaction:** `orders.csv`, `order_items.csv`, `payments.csv`, `shipments.csv`, `returns.csv`, `reviews.csv`
-    * **Analytical:** `sales.csv`, `sample_submission.csv`
-    * **Operational:** `inventory.csv`, `web_traffic.csv`
+    * **Giao dịch:** `orders.csv`, `order_items.csv`, `payments.csv`, `shipments.csv`, `returns.csv`, `reviews.csv`
+    * **Phân tích:** `sales.csv`, `sample_submission.csv`
+    * **Vận hành:** `inventory.csv`, `web_traffic.csv`
 
 ---
 
-## 2. Table Schema
+## 2. Lược đồ bảng
 
 ### `products.csv`
-* **Description:** Product catalog.
-* **Grain:** 1 row = 1 product.
-* **Primary Key:** `product_id`
-* **Foreign Keys:** None.
+* **Mô tả:** Danh mục sản phẩm.
+* **Độ chi tiết:** 1 dòng = 1 sản phẩm.
+* **Khóa chính:** `product_id`
+* **Khóa ngoại:** Không có.
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `product_id` | int | Primary key |
-| `product_name` | str | Product name |
-| `category` | str | Product category |
-| `segment` | str | Market segment |
-| `size` | str | Product size |
-| `color` | str | Product color label |
-| `price` | float | Retail price |
-| `cogs` | float | Cost of goods sold. Constraint: `cogs < price` |
+| `product_id` | int | Khóa chính |
+| `product_name` | str | Tên sản phẩm |
+| `category` | str | Danh mục sản phẩm |
+| `segment` | str | Phân khúc thị trường |
+| `size` | str | Kích cỡ sản phẩm |
+| `color` | str | Nhãn màu sản phẩm |
+| `price` | float | Giá bán lẻ |
+| `cogs` | float | Giá vốn hàng bán. Ràng buộc: `cogs < price` |
 
 ### `customers.csv`
-* **Description:** Customer information.
-* **Grain:** 1 row = 1 customer.
-* **Primary Key:** `customer_id`
-* **Foreign Keys:** `zip` -> `geography.csv`
+* **Mô tả:** Thông tin khách hàng.
+* **Độ chi tiết:** 1 dòng = 1 khách hàng.
+* **Khóa chính:** `customer_id`
+* **Khóa ngoại:** `zip` -> `geography.csv`
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `customer_id` | int | Primary key |
-| `zip` | int | Postal code (FK) |
-| `city` | str | Customer's city |
-| `signup_date` | date | Account registration date |
-| `gender` | str | Gender (Nullable) |
-| `age_group` | str | Age group (Nullable) |
-| `acquisition_channel` | str | Marketing channel (Nullable) |
+| `customer_id` | int | Khóa chính |
+| `zip` | int | Mã bưu chính (FK) |
+| `city` | str | Thành phố của khách hàng |
+| `signup_date` | date | Ngày đăng ký tài khoản |
+| `gender` | str | Giới tính (có thể null) |
+| `age_group` | str | Nhóm tuổi (có thể null) |
+| `acquisition_channel` | str | Kênh marketing (có thể null) |
 
 ### `promotions.csv`
-* **Description:** Promotional campaigns.
-* **Grain:** 1 row = 1 campaign.
-* **Primary Key:** `promo_id`
-* **Foreign Keys:** None.
+* **Mô tả:** Các chiến dịch khuyến mãi.
+* **Độ chi tiết:** 1 dòng = 1 chiến dịch.
+* **Khóa chính:** `promo_id`
+* **Khóa ngoại:** Không có.
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `promo_id` | str | Primary key |
-| `promo_name` | str | Campaign name with year |
-| `promo_type` | str | Discount type (percentage or fixed amount) |
-| `discount_value` | float | Discount value |
-| `start_date` | date | Campaign start date |
-| `end_date` | date | Campaign end date |
-| `applicable_category` | str | Applicable category (Null if applicable to all) |
-| `promo_channel` | str | Applicable distribution channel (Nullable) |
-| `stackable_flag` | int | Flag for allowing simultaneous promotions |
-| `min_order_value` | float | Minimum order value (Nullable) |
+| `promo_id` | str | Khóa chính |
+| `promo_name` | str | Tên chiến dịch kèm năm |
+| `promo_type` | str | Loại giảm giá (theo phần trăm hoặc số tiền cố định) |
+| `discount_value` | float | Giá trị giảm giá |
+| `start_date` | date | Ngày bắt đầu chiến dịch |
+| `end_date` | date | Ngày kết thúc chiến dịch |
+| `applicable_category` | str | Danh mục áp dụng (null nếu áp dụng cho tất cả) |
+| `promo_channel` | str | Kênh phân phối áp dụng (có thể null) |
+| `stackable_flag` | int | Cờ cho phép áp dụng đồng thời nhiều khuyến mãi |
+| `min_order_value` | float | Giá trị đơn hàng tối thiểu (có thể null) |
 
 ### `geography.csv`
-* **Description:** Regional postal codes.
-* **Grain:** 1 row = 1 postal code.
-* **Primary Key:** `zip`
-* **Foreign Keys:** None.
+* **Mô tả:** Mã bưu chính theo khu vực.
+* **Độ chi tiết:** 1 dòng = 1 mã bưu chính.
+* **Khóa chính:** `zip`
+* **Khóa ngoại:** Không có.
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `zip` | int | Primary key |
-| `city` | str | City name |
-| `region` | str | Geographic region |
-| `district` | str | District/County name |
+| `zip` | int | Khóa chính |
+| `city` | str | Tên thành phố |
+| `region` | str | Vùng địa lý |
+| `district` | str | Tên quận/huyện |
 
 ### `orders.csv`
-* **Description:** Order information.
-* **Grain:** 1 row = 1 order.
-* **Primary Key:** `order_id`
-* **Foreign Keys:** `customer_id` -> `customers.csv`, `zip` -> `geography.csv`
+* **Mô tả:** Thông tin đơn hàng.
+* **Độ chi tiết:** 1 dòng = 1 đơn hàng.
+* **Khóa chính:** `order_id`
+* **Khóa ngoại:** `customer_id` -> `customers.csv`, `zip` -> `geography.csv`
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `order_id` | int | Primary key |
-| `order_date` | date | Order date |
-| `customer_id` | int | FK to `customers.csv` |
-| `zip` | int | Delivery postal code (FK to `geography.csv`) |
-| `order_status` | str | Order processing status |
-| `payment_method` | str | Payment method used |
-| `device_type` | str | Device used by customer |
-| `order_source` | str | Marketing channel leading to order |
+| `order_id` | int | Khóa chính |
+| `order_date` | date | Ngày đặt hàng |
+| `customer_id` | int | FK tới `customers.csv` |
+| `zip` | int | Mã bưu chính giao hàng (FK tới `geography.csv`) |
+| `order_status` | str | Trạng thái xử lý đơn hàng |
+| `payment_method` | str | Phương thức thanh toán đã dùng |
+| `device_type` | str | Thiết bị khách hàng sử dụng |
+| `order_source` | str | Kênh marketing dẫn đến đơn hàng |
 
 ### `order_items.csv`
-* **Description:** Detail of products in each order.
-* **Grain:** 1 row = 1 product line item in an order.
-* **Primary Key:** Not explicitly defined (Implicitly composite `order_id` + `product_id`).
-* **Foreign Keys:** `order_id` -> `orders.csv`, `product_id` -> `products.csv`, `promo_id` / `promo_id_2` -> `promotions.csv`
+* **Mô tả:** Chi tiết sản phẩm trong từng đơn hàng.
+* **Độ chi tiết:** 1 dòng = 1 dòng hàng sản phẩm trong một đơn hàng.
+* **Khóa chính:** Không được định nghĩa rõ ràng (ngầm định là khóa ghép `order_id` + `product_id`).
+* **Khóa ngoại:** `order_id` -> `orders.csv`, `product_id` -> `products.csv`, `promo_id` / `promo_id_2` -> `promotions.csv`
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `order_id` | int | FK to `orders.csv` |
-| `product_id` | int | FK to `products.csv` |
-| `quantity` | int | Quantity ordered |
-| `unit_price` | float | Unit price |
-| `discount_amount` | float | Total discount amount for this line |
-| `promo_id` | str | FK to `promotions.csv` (Nullable) |
-| `promo_id_2` | str | FK to `promotions.csv` (second promo) (Nullable) |
+| `order_id` | int | FK tới `orders.csv` |
+| `product_id` | int | FK tới `products.csv` |
+| `quantity` | int | Số lượng đặt mua |
+| `unit_price` | float | Đơn giá |
+| `discount_amount` | float | Tổng số tiền giảm giá cho dòng này |
+| `promo_id` | str | FK tới `promotions.csv` (có thể null) |
+| `promo_id_2` | str | FK tới `promotions.csv` (khuyến mãi thứ hai) (có thể null) |
 
 ### `payments.csv`
-* **Description:** Payment information.
-* **Grain:** 1 row = 1 payment.
-* **Primary Key:** Not explicitly defined (Implicitly `order_id`).
-* **Foreign Keys:** `order_id` -> `orders.csv`
+* **Mô tả:** Thông tin thanh toán.
+* **Độ chi tiết:** 1 dòng = 1 khoản thanh toán.
+* **Khóa chính:** Không được định nghĩa rõ ràng (ngầm định là `order_id`).
+* **Khóa ngoại:** `order_id` -> `orders.csv`
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `order_id` | int | FK to `orders.csv` (1:1 relationship) |
-| `payment_method` | str | Payment method |
-| `payment_value` | float | Total payment value of order |
-| `installments` | int | Number of installment periods |
+| `order_id` | int | FK tới `orders.csv` (quan hệ 1:1) |
+| `payment_method` | str | Phương thức thanh toán |
+| `payment_value` | float | Tổng giá trị thanh toán của đơn hàng |
+| `installments` | int | Số kỳ trả góp |
 
 ### `shipments.csv`
-* **Description:** Shipping information.
-* **Grain:** 1 row = 1 shipment.
-* **Primary Key:** Not explicitly defined (Implicitly `order_id`).
-* **Foreign Keys:** `order_id` -> `orders.csv`
+* **Mô tả:** Thông tin vận chuyển.
+* **Độ chi tiết:** 1 dòng = 1 lần giao hàng.
+* **Khóa chính:** Không được định nghĩa rõ ràng (ngầm định là `order_id`).
+* **Khóa ngoại:** `order_id` -> `orders.csv`
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `order_id` | int | FK to `orders.csv` |
-| `ship_date` | date | Shipping date |
-| `delivery_date` | date | Date delivered to customer |
-| `shipping_fee` | float | Shipping fee. Constraint: 0 if free shipping |
+| `order_id` | int | FK tới `orders.csv` |
+| `ship_date` | date | Ngày gửi hàng |
+| `delivery_date` | date | Ngày giao cho khách hàng |
+| `shipping_fee` | float | Phí vận chuyển. Ràng buộc: bằng 0 nếu được miễn phí vận chuyển |
 
 ### `returns.csv`
-* **Description:** Returned products.
-* **Grain:** 1 row = 1 returned item instance.
-* **Primary Key:** `return_id`
-* **Foreign Keys:** `order_id` -> `orders.csv`, `product_id` -> `products.csv`
+* **Mô tả:** Sản phẩm được trả lại.
+* **Độ chi tiết:** 1 dòng = 1 trường hợp trả lại của một mặt hàng.
+* **Khóa chính:** `return_id`
+* **Khóa ngoại:** `order_id` -> `orders.csv`, `product_id` -> `products.csv`
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `return_id` | str | Primary key |
-| `order_id` | int | FK to `orders.csv` |
-| `product_id` | int | FK to `products.csv` |
-| `return_date` | date | Return date |
-| `return_reason` | str | Reason for return |
-| `return_quantity` | int | Quantity returned |
-| `refund_amount` | float | Refund amount |
+| `return_id` | str | Khóa chính |
+| `order_id` | int | FK tới `orders.csv` |
+| `product_id` | int | FK tới `products.csv` |
+| `return_date` | date | Ngày trả hàng |
+| `return_reason` | str | Lý do trả hàng |
+| `return_quantity` | int | Số lượng trả |
+| `refund_amount` | float | Số tiền hoàn trả |
 
 ### `reviews.csv`
-* **Description:** Product reviews post-delivery.
-* **Grain:** 1 row = 1 review.
-* **Primary Key:** `review_id`
-* **Foreign Keys:** `order_id` -> `orders.csv`, `product_id` -> `products.csv`, `customer_id` -> `customers.csv`
+* **Mô tả:** Đánh giá sản phẩm sau khi giao hàng.
+* **Độ chi tiết:** 1 dòng = 1 đánh giá.
+* **Khóa chính:** `review_id`
+* **Khóa ngoại:** `order_id` -> `orders.csv`, `product_id` -> `products.csv`, `customer_id` -> `customers.csv`
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `review_id` | str | Primary key |
-| `order_id` | int | FK to `orders.csv` |
-| `product_id` | int | FK to `products.csv` |
-| `customer_id` | int | FK to `customers.csv` |
-| `review_date` | date | Review submission date |
-| `rating` | int | Rating from 1 to 5 |
-| `review_title` | str | Review title |
+| `review_id` | str | Khóa chính |
+| `order_id` | int | FK tới `orders.csv` |
+| `product_id` | int | FK tới `products.csv` |
+| `customer_id` | int | FK tới `customers.csv` |
+| `review_date` | date | Ngày gửi đánh giá |
+| `rating` | int | Điểm đánh giá từ 1 đến 5 |
+| `review_title` | str | Tiêu đề đánh giá |
 
-### `sales.csv` (and `sample_submission.csv`)
-* **Description:** Revenue data / Target format.
-* **Grain:** 1 row = 1 Date.
-* **Primary Key:** `Date` (Implicit).
-* **Foreign Keys:** None.
+### `sales.csv` (và `sample_submission.csv`)
+* **Mô tả:** Dữ liệu doanh thu / định dạng đầu ra.
+* **Độ chi tiết:** 1 dòng = 1 ngày.
+* **Khóa chính:** `Date` (ngầm định).
+* **Khóa ngoại:** Không có.
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `Date` | date | Order date |
-| `Revenue` | float | Net revenue |
-| `COGS` | float | Total cost of goods sold |
+| `Date` | date | Ngày đặt hàng |
+| `Revenue` | float | Doanh thu thuần |
+| `COGS` | float | Tổng giá vốn hàng bán |
 
 ### `inventory.csv`
-* **Description:** End-of-month inventory snapshots.
-* **Grain:** 1 row = 1 product per month.
-* **Primary Key:** Not explicitly defined (Implicitly composite `snapshot_date` + `product_id`).
-* **Foreign Keys:** `product_id` -> `products.csv`
+* **Mô tả:** Ảnh chụp tồn kho vào cuối tháng.
+* **Độ chi tiết:** 1 dòng = 1 sản phẩm theo từng tháng.
+* **Khóa chính:** Không được định nghĩa rõ ràng (ngầm định là khóa ghép `snapshot_date` + `product_id`).
+* **Khóa ngoại:** `product_id` -> `products.csv`
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `snapshot_date` | date | Snapshot date (end of month) |
-| `product_id` | int | FK to `products.csv` |
-| `stock_on_hand` | int | End of month stock |
-| `units_received` | int | Units received in month |
-| `units_sold` | int | Units sold in month |
-| `stockout_days` | int | Days out of stock in month |
-| `days_of_supply` | float | Days of supply available |
-| `fill_rate` | float | Order fulfillment rate from stock |
-| `stockout_flag` | int | Stockout indicator |
-| `overstock_flag` | int | Overstock indicator |
-| `reorder_flag` | int | Early reorder indicator |
-| `sell_through_rate` | float | Ratio of sold to available stock |
-| `product_name` | str | Product name |
-| `category` | str | Product category |
-| `segment` | str | Product segment |
-| `year` | int | Year extracted from `snapshot_date` |
-| `month` | int | Month extracted from `snapshot_date` |
+| `snapshot_date` | date | Ngày chụp dữ liệu (cuối tháng) |
+| `product_id` | int | FK tới `products.csv` |
+| `stock_on_hand` | int | Tồn kho cuối tháng |
+| `units_received` | int | Số lượng nhập trong tháng |
+| `units_sold` | int | Số lượng bán ra trong tháng |
+| `stockout_days` | int | Số ngày hết hàng trong tháng |
+| `days_of_supply` | float | Số ngày cung ứng hiện có |
+| `fill_rate` | float | Tỷ lệ đáp ứng đơn hàng từ tồn kho |
+| `stockout_flag` | int | Cờ hết hàng |
+| `overstock_flag` | int | Cờ tồn kho dư |
+| `reorder_flag` | int | Cờ đặt hàng lại sớm |
+| `sell_through_rate` | float | Tỷ lệ bán được trên lượng hàng sẵn có |
+| `product_name` | str | Tên sản phẩm |
+| `category` | str | Danh mục sản phẩm |
+| `segment` | str | Phân khúc sản phẩm |
+| `year` | int | Năm trích xuất từ `snapshot_date` |
+| `month` | int | Tháng trích xuất từ `snapshot_date` |
 
 ### `web_traffic.csv`
-* **Description:** Daily website traffic.
-* **Grain:** 1 row = 1 day.
-* **Primary Key:** Not explicitly defined (Implicitly `date`).
-* **Foreign Keys:** None.
+* **Mô tả:** Lưu lượng truy cập website hằng ngày.
+* **Độ chi tiết:** 1 dòng = 1 ngày.
+* **Khóa chính:** Không được định nghĩa rõ ràng (ngầm định là `date`).
+* **Khóa ngoại:** Không có.
 
-| Column | Type | Description & Constraints |
+| Cột | Kiểu | Mô tả & Ràng buộc |
 | :--- | :--- | :--- |
-| `date` | date | Traffic date |
-| `sessions` | int | Total sessions in the day |
-| `unique_visitors` | int | Unique visitors |
-| `page_views` | int | Total page views |
-| `bounce_rate` | float | Single-page session bounce rate |
-| `avg_session_duration_sec` | float | Avg session duration in seconds |
-| `traffic_source` | str | Main source driving traffic for the day |
+| `date` | date | Ngày ghi nhận lưu lượng |
+| `sessions` | int | Tổng số phiên trong ngày |
+| `unique_visitors` | int | Số khách truy cập duy nhất |
+| `page_views` | int | Tổng số lượt xem trang |
+| `bounce_rate` | float | Tỷ lệ thoát của phiên chỉ xem một trang |
+| `avg_session_duration_sec` | float | Thời lượng phiên trung bình tính bằng giây |
+| `traffic_source` | str | Nguồn chính tạo ra lưu lượng trong ngày |
 
 ---
 
-## 3. Relationships
+## 3. Mối quan hệ
 
-* **`orders` <-> `payments`**: 1 : 1 (Mandatory).
-* **`orders` <-> `shipments`**: 1 : 0 or 1 (Optional; only exists if status is shipped, delivered, or returned).
-* **`orders` <-> `returns`**: 1 : 0 or many (Optional; only exists if status is returned).
-* **`orders` <-> `reviews`**: 1 : 0 or many (Optional; only exists if status is delivered, ~20% of the time).
-* **`order_items` <-> `promotions`**: many : 0 or 1 (Optional; `promo_id` can be null).
-* **`products` <-> `inventory`**: 1 : many (1 row per product per month).
-
----
-
-## 4. Business Logic & Rules
-
-* **Pricing Constraint:** `cogs` must strictly be `< price` for all products.
-* **Promotion Formulas:**
-    * **Percentage:** `discount_amount = quantity * unit_price * (discount_value / 100)`
-    * **Fixed Amount:** `discount_amount = quantity * discount_value`
-* **Operational Constraints:**
-    * `applicable_category` in `promotions.csv` is `NULL` if a promotion applies to all categories.
-    * `shipping_fee` in `shipments.csv` is `0` if the order is eligible for free shipping.
+* **`orders` <-> `payments`**: 1 : 1 (bắt buộc).
+* **`orders` <-> `shipments`**: 1 : 0 hoặc 1 (tùy chọn; chỉ tồn tại nếu trạng thái là shipped, delivered, hoặc returned).
+* **`orders` <-> `returns`**: 1 : 0 hoặc nhiều (tùy chọn; chỉ tồn tại nếu trạng thái là returned).
+* **`orders` <-> `reviews`**: 1 : 0 hoặc nhiều (tùy chọn; chỉ tồn tại nếu trạng thái là delivered, khoảng 20% thời gian).
+* **`order_items` <-> `promotions`**: nhiều : 0 hoặc 1 (tùy chọn; `promo_id` có thể là null).
+* **`products` <-> `inventory`**: 1 : nhiều (1 dòng cho mỗi sản phẩm mỗi tháng).
 
 ---
 
-## 5. Derived Metrics
+## 4. Logic kinh doanh & quy tắc
 
-* **Gross Profit Margin:** `(price - cogs) / price` (Requires `products.csv`) .
-* **Return Rate:** Number of records in `returns.csv` divided by the number of rows in `order_items.csv` (Requires joining `returns.csv` with `products.csv` on `product_id` to filter by product attributes like size, and comparing against `order_items.csv`) .
-* **Inter-order Gap:** The median number of days between two consecutive purchases made by the same customer (Requires `orders.csv`) .
-* **Average Orders per Customer:** Total orders / Number of customers in a specific group, such as an age group (Requires `orders.csv`, `customers.csv`) .
-* **Promotion Application Rate:** Percentage of rows in `order_items.csv` where a promotion is applied (i.e., `promo_id` is not null) .
-* **Discount Amount Calculation** (Requires `promotions.csv`, `order_items.csv`):
-  * *Percentage Promo:* `discount_amount = quantity × unit_price × (discount_value/100)`
-  * *Fixed Promo:* `discount_amount = quantity × discount_value`
+* **Ràng buộc giá:** `cogs` phải luôn nhỏ hơn nghiêm ngặt `price` đối với tất cả sản phẩm.
+* **Công thức khuyến mãi:**
+    * **Theo phần trăm:** `discount_amount = quantity * unit_price * (discount_value / 100)`
+    * **Số tiền cố định:** `discount_amount = quantity * discount_value`
+* **Ràng buộc vận hành:**
+    * `applicable_category` trong `promotions.csv` là `NULL` nếu khuyến mãi áp dụng cho tất cả danh mục.
+    * `shipping_fee` trong `shipments.csv` bằng `0` nếu đơn hàng đủ điều kiện miễn phí vận chuyển.
 
 ---
 
-## 6. Data Quality Risks
+## 5. Chỉ số suy diễn
 
-* **Nullable Columns:**
+* **Biên lợi nhuận gộp:** `(price - cogs) / price` (cần `products.csv`) .
+* **Tỷ lệ trả hàng:** Số bản ghi trong `returns.csv` chia cho số dòng trong `order_items.csv` (cần nối `returns.csv` với `products.csv` theo `product_id` để lọc theo thuộc tính sản phẩm như size, và so sánh với `order_items.csv`) .
+* **Khoảng cách giữa các đơn hàng:** Số ngày trung vị giữa hai lần mua liên tiếp của cùng một khách hàng (cần `orders.csv`) .
+* **Số đơn hàng trung bình mỗi khách hàng:** Tổng số đơn hàng / Số khách hàng trong một nhóm cụ thể, chẳng hạn một nhóm tuổi (cần `orders.csv`, `customers.csv`) .
+* **Tỷ lệ áp dụng khuyến mãi:** Tỷ lệ phần trăm các dòng trong `order_items.csv` có áp dụng khuyến mãi (tức là `promo_id` không null) .
+* **Tính số tiền giảm giá** (cần `promotions.csv`, `order_items.csv`):
+  * *Khuyến mãi theo phần trăm:* `discount_amount = quantity × unit_price × (discount_value/100)`
+  * *Khuyến mãi số tiền cố định:* `discount_amount = quantity × discount_value`
+
+---
+
+## 6. Rủi ro chất lượng dữ liệu
+
+* **Các cột có thể null:**
     * `customers.csv`: `gender`, `age_group`, `acquisition_channel`.
     * `promotions.csv`: `applicable_category`, `promo_channel`, `min_order_value`.
     * `order_items.csv`: `promo_id`, `promo_id_2`.
-* **Missing Relationships:** No direct links exist between `web_traffic.csv` and transactional data. These must be joined by date or by mapping `traffic_source` to `order_source`.
+* **Thiếu quan hệ:** Không có liên kết trực tiếp giữa `web_traffic.csv` và dữ liệu giao dịch. Hai nguồn này phải được nối theo ngày hoặc bằng cách ánh xạ `traffic_source` sang `order_source`.
 
 ---
 
-## 7. Analytical Opportunities
+## 7. Cơ hội phân tích
 
-Supported analyses map directly to evaluation criteria for EDA (Descriptive -> Prescriptive):
+Các phân tích được hỗ trợ ánh xạ trực tiếp với tiêu chí đánh giá cho EDA (Mô tả -> Đề xuất):
 
-* **Customer Behavior:** Inter-order gaps, average orders by age group.
-* **Product Performance:** Gross profit margins by segment, return rates by product size, return reasons.
-* **Marketing:** Website bounce rates by traffic source, evaluating promo application ratios.
-* **Operational:** Correlating payment installments with order values, mapping cancelled orders by payment method, revenue tracking by geographic region.
-
----
-
-## 8. Machine Learning Task Definition
-
-* **Target Variable:** Revenue (Predicting unique daily `Date`, `Revenue`, `COGS` tuples for the test period).
-* **Input Features:** Must be engineered strictly from the provided files. Using `Revenue` or `COGS` from the test period as features is strictly prohibited and will result in disqualification.
-* **Time Dependency:** Forecasting Revenue per day for 01/01/2023 to 01/07/2024. The exact chronological order in the submission file must be strictly preserved without shuffling.
-* **Evaluation Metrics:** MAE, RMSE, and $R^2$ (Coefficient of Determination).
+* **Hành vi khách hàng:** Khoảng cách giữa các đơn hàng, số đơn trung bình theo nhóm tuổi.
+* **Hiệu suất sản phẩm:** Biên lợi nhuận gộp theo phân khúc, tỷ lệ trả hàng theo size sản phẩm, lý do trả hàng.
+* **Marketing:** Tỷ lệ thoát website theo nguồn lưu lượng, đánh giá tỷ lệ áp dụng khuyến mãi.
+* **Vận hành:** Tương quan giữa số kỳ trả góp và giá trị đơn hàng, ánh xạ các đơn bị hủy theo phương thức thanh toán, theo dõi doanh thu theo khu vực địa lý.
 
 ---
 
-## 9. Limitations
+## 8. Định nghĩa tác vụ học máy
 
-* **Prohibitions:** Use of any external datasets is explicitly forbidden.
-* **Missing Data Aspects:** Test target values (`sales_test.csv`) are intentionally withheld.
-* **Inference Restrictions:** Primary keys for granular operational/transactional tables (`order_items`, `payments`, `shipments`, `inventory`, `web_traffic`) are not explicitly defined in the source document and require composite key strategies.
+* **Biến mục tiêu:** Revenue (dự đoán các bộ ba `Date`, `Revenue`, `COGS` duy nhất theo ngày cho giai đoạn kiểm thử).
+* **Đặc trưng đầu vào:** Phải được thiết kế nghiêm ngặt từ các tệp được cung cấp. Việc sử dụng `Revenue` hoặc `COGS` từ giai đoạn kiểm thử làm đặc trưng là bị cấm tuyệt đối và sẽ dẫn đến bị loại.
+* **Phụ thuộc thời gian:** Dự báo Revenue theo ngày cho giai đoạn 01/01/2023 đến 01/07/2024. Thứ tự thời gian chính xác trong tệp nộp bài phải được giữ nguyên tuyệt đối, không được xáo trộn.
+* **Thước đo đánh giá:** MAE, RMSE và $R^2$ (Hệ số xác định).
 
 ---
 
-## 10. Strict Fact Check & Verification
+## 9. Giới hạn
 
-* **Explicit Sourcing:** Every column name, data type, foreign key relationship, and formula listed above is explicitly supported by Tables 1 and 2, and Section 1 of the provided document excerpts. 
-* **Task Bounds:** The ML constraints, target variables, and evaluation criteria are strictly sourced from Section 2.
-* **Assumption Avoidance:** Primary keys were not hallucinated for tables lacking explicit definitions (e.g., `order_items`, `payments`, `shipments`, `web_traffic`). Nullable fields are documented exactly as detailed in the source dataset overview.
+* **Điều cấm:** Nghiêm cấm sử dụng bất kỳ bộ dữ liệu bên ngoài nào.
+* **Khía cạnh dữ liệu bị thiếu:** Các giá trị mục tiêu của tập kiểm thử (`sales_test.csv`) được cố ý giữ lại.
+* **Giới hạn suy luận:** Khóa chính cho các bảng nghiệp vụ/giao dịch chi tiết (`order_items`, `payments`, `shipments`, `inventory`, `web_traffic`) không được định nghĩa rõ ràng trong tài liệu nguồn và cần chiến lược khóa ghép.
+
+---
+
+## 10. Kiểm tra và xác minh sự thật nghiêm ngặt
+
+* **Nguồn trích dẫn rõ ràng:** Mọi tên cột, kiểu dữ liệu, quan hệ khóa ngoại và công thức liệt kê ở trên đều được hỗ trợ trực tiếp bởi Bảng 1 và 2, cùng với Mục 1 của các trích đoạn tài liệu được cung cấp. 
+* **Giới hạn nhiệm vụ:** Các ràng buộc ML, biến mục tiêu và tiêu chí đánh giá đều được trích trực tiếp từ Mục 2.
+* **Tránh suy đoán:** Không tự suy diễn khóa chính cho các bảng không có định nghĩa rõ ràng (ví dụ: `order_items`, `payments`, `shipments`, `web_traffic`). Các trường nullable được ghi nhận đúng như mô tả trong phần tổng quan bộ dữ liệu nguồn.
