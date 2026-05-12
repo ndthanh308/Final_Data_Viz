@@ -1,19 +1,16 @@
 from __future__ import annotations
 
+import ast
 import base64
 import io
 import json
 import os
-import sqlite3
-import sys
-import time
-import ast
-import re
+import traceback
 from contextlib import redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Literal, Optional, TypedDict
 
 import pandas as pd
 
@@ -25,7 +22,6 @@ import matplotlib.pyplot as plt  # noqa: E402
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
-
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
@@ -37,578 +33,498 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 
 
-class HITLState(TypedDict, total=False):
-	user_request: str
-	context: Dict[str, Any]
-	generated_code: str
-	explanation: str
-	approved_code: str
-	execution_result: Dict[str, Any]
-	logs: List[str]
-	thread_id: str
+class MultiAgentState(TypedDict, total=False):
+    session_id: str
+    chat_history: List[Dict[str, Any]]
+    csv_schemas: Any
+    user_request: str
+    generated_code: str
+    approved_code: str
+    execution_result: Dict[str, Any]
+    execution_error: str
+    insights: str
+    status: str
 
 
 @dataclass
 class GraphArtifacts:
-	graph: Any
-	checkpointer: Any
-	db_path: Path
-
-
-def _utc_now_iso() -> str:
-	return datetime.now(timezone.utc).isoformat()
-
-
-def _json_dumps(obj: Any) -> str:
-	return json.dumps(obj, ensure_ascii=False, default=str)
-
-
-def _safe_json_loads(text: str) -> Dict[str, Any]:
-	t = (text or "").strip()
-	if t.startswith("```"):
-		t = t.strip("`")
-		t = t.replace("json\n", "", 1).strip()
-	try:
-		return json.loads(t)
-	except Exception:
-		return {}
-
-
-def get_llm() -> ChatOpenAI:
-	if not OPENAI_API_KEY:
-		raise ValueError("OPENAI_API_KEY is missing")
-	return ChatOpenAI(model=OPENAI_MODEL, api_key=OPENAI_API_KEY, temperature=0.2)
-
-
-def chat_answer(user_message: str, context: Optional[Dict[str, Any]] = None) -> str:
-	"""General chat/Q&A with the LLM (no code execution).
-
-	This is intentionally separate from the HITL graph so that:
-	- it never triggers code generation/execution steps unless the user asks
-	- UI can support "normal" chat not strictly tied to plotting
-	"""
-	msg = (user_message or "").strip()
-	ctx = context if isinstance(context, dict) else {}
-	if not msg:
-		return "Please provide a message."
-
-	llm = get_llm()
-	sys_prompt = SystemMessage(
-		content=(
-			"You are a helpful data assistant. Answer the user's question directly and clearly. "
-			"You MUST NOT execute any code. "
-			"If the user asks for code, you may provide Python code snippets, but include explanations as comments inside the code. "
-			"If dataset context is provided, use it to ground your answer (tables, columns, dtypes, samples). "
-			"If context is missing, ask a short clarifying question."
-		)
-	)
-	human = HumanMessage(
-		content=(
-			f"USER_MESSAGE:\n{msg}\n\n"
-			f"OPTIONAL_DATASET_CONTEXT_JSON:\n{_json_dumps(ctx)}\n"
-		)
-	)
-	resp = llm.invoke([sys_prompt, human])
-	return (resp.content or "").strip()
-
-
-def _add_log(state: HITLState, msg: str) -> HITLState:
-	logs = list(state.get("logs", []))
-	logs.append(f"[{_utc_now_iso()}] {msg}")
-	return {**state, "logs": logs}
-
-
-# -------------------------
-# SQLite logging
-# -------------------------
-
-
-def init_db(db_path: Path) -> None:
-	db_path.parent.mkdir(parents=True, exist_ok=True)
-	with sqlite3.connect(db_path) as conn:
-		conn.execute(
-			"""
-			CREATE TABLE IF NOT EXISTS hitl_logs (
-			  id INTEGER PRIMARY KEY AUTOINCREMENT,
-			  created_at TEXT NOT NULL,
-			  thread_id TEXT NOT NULL,
-			  user_request TEXT NOT NULL,
-			  context_json TEXT,
-			  generated_code TEXT,
-			  explanation TEXT,
-			  approved_code TEXT,
-			  execution_result_json TEXT
-			)
-			"""
-		)
-		conn.commit()
-
-
-def insert_log(db_path: Path, state: HITLState) -> None:
-	init_db(db_path)
-	with sqlite3.connect(db_path) as conn:
-		conn.execute(
-			"""
-			INSERT INTO hitl_logs (
-			  created_at, thread_id, user_request, context_json,
-			  generated_code, explanation, approved_code, execution_result_json
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-			""" ,
-			(
-				_utc_now_iso(),
-				str(state.get("thread_id", "")),
-				str(state.get("user_request", "")),
-				_json_dumps(state.get("context", {})),
-				state.get("generated_code", ""),
-				state.get("explanation", ""),
-				state.get("approved_code", ""),
-				_json_dumps(state.get("execution_result", {})),
-			),
-		)
-		conn.commit()
-
-
-def fetch_logs(db_path: Path, limit: int = 200) -> List[Dict[str, Any]]:
-	init_db(db_path)
-	with sqlite3.connect(db_path) as conn:
-		conn.row_factory = sqlite3.Row
-		rows = conn.execute(
-			"SELECT * FROM hitl_logs ORDER BY id DESC LIMIT ?",
-			(int(limit),),
-		).fetchall()
-	out: List[Dict[str, Any]] = []
-	for r in rows:
-		out.append({k: r[k] for k in r.keys()})
-	return out
-
-
-# -------------------------
-# Graph nodes
-# -------------------------
-
-
-def generate_code_node(state: HITLState) -> HITLState:
-	"""Generate analysis code only (no execution), with explanations as comments."""
-
-	state = _add_log(state, "generate_code_node: started")
-	user_request = state.get("user_request", "").strip()
-	context = state.get("context", {})
-
-	if not user_request:
-		return _add_log(state, "generate_code_node: empty user_request")
-
-	llm = get_llm()
-
-	# IMPORTANT: We only pass schema/context, not the full dataset.
-	# The generated code MUST be runnable locally later.
-	sys_prompt = SystemMessage(
-		content=(
-			"You are an AI data analyst. You MUST ONLY generate Python code; you MUST NOT execute anything. "
-			"Your output must be valid JSON with keys: generated_code, explanation. "
-			"Rules for generated_code (must be runnable as-is):\n"
-			"- Use pandas + matplotlib only.\n"
-			"- You are given: tables (dict[str, pandas.DataFrame]), df (pandas.DataFrame default table), and context (dict schema).\n"
-			"- Do NOT read files. Do NOT call network. Do NOT import anything.\n"
-			"- Do NOT use placeholders like 'YOUR_COLUMN', 'TODO', or assume columns exist.\n"
-			"- ALWAYS validate required tables/columns before using them.\n"
-			"  If a requested column is missing, either choose a sensible alternative from available columns, OR raise ValueError with a clear message that lists available columns.\n"
-			"- Prefer explicit table usage: tables['orders'] etc. Use df only for the default table.\n"
-			"- Handle common messy data: parse datetimes, coerce numeric, handle NaNs, avoid crashing on empty data (return a summary message).\n"
-			"- Plotting must be readable by default (avoid overlapping):\n"
-			"  - Always create figures with explicit figsize (e.g., (10, 4) or larger).\n"
-			"  - Always call plt.tight_layout() after plotting.\n"
-			"  - If x labels are long or there are many categories, rotate x tick labels (e.g., 30-60 degrees) and/or use a horizontal bar chart.\n"
-			"  - If there are many categories (>12), show top-N (e.g., top 10) and group the rest as 'Other' OR use horizontal bars.\n"
-			"  - For time-series: sort by time, use a sensible frequency, and format dates to avoid clutter (e.g., monthly ticks).\n"
-			"- Add natural-language explanations as Python comments inside the code (Vietnamese comments are ok).\n"
-			"- Produce a variable named result (dict) with keys:\n"
-			"  - 'summary' (str)\n"
-			"  - 'tables' (list)  # list of small DataFrames/dicts\n"
-			"  - 'figures' (list) # optional\n"
-			"  - 'used_tables' (list[str]) # include every table name you actually read from\n"
-			"Helpers available (no imports needed):\n"
-			"- require_columns(df, cols, df_name='df') -> None (raises ValueError)\n"
-			"- pick_first_column(df, candidates) -> str (raises ValueError)\n"
-		)
-	)
-
-	user_prompt = HumanMessage(
-		content=(
-			"Generate analysis code for this request using ONLY the provided dataset schema/context.\n\n"
-			f"USER_REQUEST:\n{user_request}\n\n"
-			f"DATASET_CONTEXT_JSON:\n{_json_dumps(context)}\n"
-		)
-	)
-
-	resp = llm.invoke([sys_prompt, user_prompt])
-	parsed = _safe_json_loads(resp.content or "")
-	generated_code = (parsed.get("generated_code") or "").strip()
-	explanation = (parsed.get("explanation") or "").strip()
-
-	# Fallback if model didn't follow JSON.
-	if not generated_code:
-		generated_code = (resp.content or "").strip()
-		explanation = explanation or "Model did not return JSON. Using raw output."
-
-	state = {
-		**state,
-		"generated_code": generated_code,
-		"explanation": explanation,
-	}
-	state = _add_log(state, "generate_code_node: done")
-	return state
-
-
-def human_approval_node(state: HITLState) -> HITLState:
-	"""Dummy node to represent human approval step (graph will interrupt before execution)."""
-	return _add_log(state, "human_approval_node: awaiting approval")
-
-
-def _encode_fig_to_base64_png(fig: plt.Figure) -> str:
-	buf = io.BytesIO()
-	fig.savefig(buf, format="png", bbox_inches="tight", dpi=160)
-	buf.seek(0)
-	return base64.b64encode(buf.read()).decode("utf-8")
-
-
-def _infer_used_tables_from_code(code: str, default_table: Optional[str]) -> List[str]:
-	# Best-effort inference for UI display/logging.
-	# Recognizes: tables["orders"], tables['orders'], tables.get("orders"), tables.get('orders')
-	used: List[str] = []
-	for m in re.finditer(r"tables\s*\[\s*[\"']([^\"']+)[\"']\s*\]", code or ""):
-		used.append(m.group(1))
-	for m in re.finditer(r"tables\s*\.\s*get\(\s*[\"']([^\"']+)[\"']", code or ""):
-		used.append(m.group(1))
-	if (code or "").find("df") != -1 and default_table:
-		used.append(default_table)
-	# Dedupe in order.
-	seen = set()
-	out: List[str] = []
-	for t in used:
-		if t not in seen:
-			seen.add(t)
-			out.append(t)
-	return out
-
-
-def _safe_exec_analysis(
-	code: str,
-	df: pd.DataFrame,
-	tables: Dict[str, pd.DataFrame],
-	default_table: Optional[str],
-	context: Dict[str, Any],
-) -> Dict[str, Any]:
-	"""Execute approved code locally in a restricted environment.
-
-	This is NOT a perfect sandbox (Python is hard to fully sandbox), but we reduce risk by:
-	- providing a minimal set of builtins
-	- not exposing file/network utilities
-	- pre-providing df/pd/plt
-	"""
-
-	def _validate_code(user_code: str) -> None:
-		"""Best-effort validation to block obviously dangerous code.
-
-		Note: This is not a perfect sandbox, but it enforces HITL constraints:
-		- no import statements
-		- no file/network/process primitives
-		- no direct use of __import__/exec/eval/open
-		"""
-
-		tree = ast.parse(user_code)
-		banned_names = {
-			"open",
-			"exec",
-			"eval",
-			"compile",
-			"__import__",
-			"input",
-			"globals",
-			"locals",
-			"vars",
-			"dir",
-			"help",
-			"breakpoint",
-		}
-		banned_modules = {
-			"os",
-			"sys",
-			"subprocess",
-			"socket",
-			"pathlib",
-			"shlex",
-			"importlib",
-			"builtins",
-		}
-
-		for node in ast.walk(tree):
-			if isinstance(node, (ast.Import, ast.ImportFrom)):
-				raise ValueError("Import statements are not allowed in approved_code.")
-			if isinstance(node, ast.Name) and node.id in banned_names:
-				raise ValueError(f"Use of '{node.id}' is not allowed.")
-			if isinstance(node, ast.Name) and node.id in banned_modules:
-				raise ValueError(f"Use of module name '{node.id}' is not allowed.")
-			if isinstance(node, ast.Attribute) and isinstance(node.attr, str) and node.attr.startswith("__"):
-				raise ValueError("Access to dunder attributes is not allowed.")
-
-	_validate_code(code)
-
-	# Allow-listed import: needed because pandas/matplotlib perform internal imports.
-	real_import = __import__
-	allowed_import_roots = {
-		"pandas",
-		"numpy",
-		"matplotlib",
-		"dateutil",
-		"pytz",
-		"math",
-		"statistics",
-		"re",
-		"collections",
-		"itertools",
-		"functools",
-		"operator",
-		"decimal",
-		"typing",
-	}
-
-	def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
-		root = (name or "").split(".")[0]
-		if root not in allowed_import_roots:
-			raise ImportError(f"Import of '{root}' is blocked by policy")
-		return real_import(name, globals, locals, fromlist, level)
-
-	allowed_builtins = {
-		"print": print,
-		"Exception": Exception,
-		"ValueError": ValueError,
-		"RuntimeError": RuntimeError,
-		"hasattr": hasattr,
-		"getattr": getattr,
-		"len": len,
-		"range": range,
-		"min": min,
-		"max": max,
-		"sum": sum,
-		"sorted": sorted,
-		"any": any,
-		"all": all,
-		"abs": abs,
-		"round": round,
-		"enumerate": enumerate,
-		"isinstance": isinstance,
-		"type": type,
-		"list": list,
-		"dict": dict,
-		"set": set,
-		"tuple": tuple,
-		"str": str,
-		"int": int,
-		"float": float,
-		"__import__": safe_import,
-	}
-
-	def require_columns(user_df: pd.DataFrame, cols: List[str], df_name: str = "df") -> None:
-		missing = [c for c in cols if c not in user_df.columns]
-		if missing:
-			raise ValueError(
-				f"Missing required columns in {df_name}: {missing}. Available columns: {list(user_df.columns)}"
-			)
-
-	def pick_first_column(user_df: pd.DataFrame, candidates: List[str]) -> str:
-		for c in candidates:
-			if c in user_df.columns:
-				return c
-		raise ValueError(
-			f"None of the candidate columns exist: {candidates}. Available columns: {list(user_df.columns)}"
-		)
-
-	exec_globals = {
-		"__builtins__": allowed_builtins,
-		"pd": pd,
-		"plt": plt,
-		"df": df,
-		"tables": tables,
-		"context": context,
-		"require_columns": require_columns,
-		"pick_first_column": pick_first_column,
-	}
-	exec_locals: Dict[str, Any] = {}
-
-	# Capture stdout.
-	stdout_buf = io.StringIO()
-	before_figs = set(plt.get_fignums())
-
-	with redirect_stdout(stdout_buf):
-		exec(code, exec_globals, exec_locals)
-
-	# Collect figures.
-	after_figs = [n for n in plt.get_fignums() if n not in before_figs]
-	images_b64: List[str] = []
-	for n in after_figs:
-		fig = plt.figure(n)
-		images_b64.append(_encode_fig_to_base64_png(fig))
-
-	# Try to read result dict.
-	result_obj = exec_locals.get("result") or exec_globals.get("result")
-	if not isinstance(result_obj, dict):
-		result_obj = {
-			"summary": "No `result` dict was produced by the code.",
-			"tables": [],
-			"figures": [],
-			"used_tables": [],
-		}
-
-	used_tables_inferred = _infer_used_tables_from_code(code, default_table)
-	used_tables_reported: List[str] = []
-	if isinstance(result_obj.get("used_tables"), list):
-		used_tables_reported = [str(x) for x in result_obj.get("used_tables") or []]
-	if not used_tables_reported:
-		used_tables_reported = used_tables_inferred
-	result_obj["used_tables"] = used_tables_reported
-
-	# Convert DataFrames in tables to JSON-ish.
-	tables_out: List[Dict[str, Any]] = []
-	for t in result_obj.get("tables", []) if isinstance(result_obj.get("tables"), list) else []:
-		if isinstance(t, pd.DataFrame):
-			tables_out.append(
-				{
-					"type": "dataframe",
-					"data": t.head(200).to_dict(orient="records"),
-					"columns": list(t.columns),
-				}
-			)
-		elif isinstance(t, dict):
-			tables_out.append({"type": "dict", "data": t})
-		else:
-			tables_out.append({"type": "text", "data": str(t)})
-
-	# Cleanup matplotlib state for next run.
-	plt.close("all")
-
-	return {
-		"stdout": stdout_buf.getvalue(),
-		"summary": str(result_obj.get("summary", "")),
-		"tables": tables_out,
-		"images_base64_png": images_b64,
-		"meta": {
-			"python": sys.version,
-			"executed_at": _utc_now_iso(),
-			"used_tables": used_tables_reported,
-			"default_table": default_table,
-			"available_tables": sorted(list(tables.keys())),
-		},
-	}
-
-
-def _load_tables_from_context(context: Dict[str, Any]) -> tuple[Dict[str, pd.DataFrame], pd.DataFrame, Optional[str]]:
-	"""Load tables for local execution.
-
-	Supported context formats:
-	- Single-table (legacy): {"csv_path": "/path/to/file.csv", ...}
-	- Multi-table: {
-	    "raw_dir": "/abs/path/to/data/main/raw",
-	    "tables": {"orders": {...schema...}, "payments": {...}},
-	    "default_table": "orders"
-	  }
-	Keys of `tables` are treated as table names; execution loads `${raw_dir}/{name}.csv`.
-	"""
-	if not isinstance(context, dict):
-		context = {}
-
-	csv_path = context.get("csv_path")
-	if csv_path:
-		df = pd.read_csv(str(csv_path))
-		return {"df": df}, df, "df"
-
-	raw_dir = context.get("raw_dir")
-	tables_spec = context.get("tables")
-	default_table = context.get("default_table")
-	if not raw_dir or not isinstance(tables_spec, dict) or not tables_spec:
-		raise ValueError("Execution context must include either context.csv_path or context.raw_dir + context.tables")
-
-	raw_root = Path(str(raw_dir)).expanduser().resolve()
-	if not raw_root.exists() or not raw_root.is_dir():
-		raise ValueError(f"context.raw_dir does not exist or is not a directory: {raw_root}")
-
-	loaded: Dict[str, pd.DataFrame] = {}
-	for table_name in tables_spec.keys():
-		name = str(table_name)
-		csv_file = (raw_root / f"{name}.csv").resolve()
-		# Ensure path is inside raw_root to prevent traversal.
-		if raw_root not in csv_file.parents:
-			raise ValueError(f"Blocked table path outside raw_dir: {csv_file}")
-		if not csv_file.exists():
-			raise ValueError(f"Missing CSV for table '{name}': {csv_file}")
-		loaded[name] = pd.read_csv(csv_file)
-
-	if not default_table or str(default_table) not in loaded:
-		default_table = next(iter(loaded.keys()))
-
-	return loaded, loaded[str(default_table)], str(default_table)
-
-
-def execute_code_node(state: HITLState) -> HITLState:
-	"""Execute ONLY the human-approved code locally and capture outputs."""
-
-	state = _add_log(state, "execute_code_node: started")
-	approved_code = (state.get("approved_code") or "").strip()
-	context = state.get("context", {})
-
-	if not approved_code:
-		state = _add_log(state, "execute_code_node: missing approved_code")
-		return {**state, "execution_result": {"error": "approved_code is required"}}
-
-	try:
-		tables, df, default_table = _load_tables_from_context(context)
-	except Exception as e:
-		return {**state, "execution_result": {"error": str(e)}}
-
-	started = time.time()
-	try:
-		result = _safe_exec_analysis(approved_code, df, tables, default_table, context if isinstance(context, dict) else {})
-		result["meta"]["elapsed_sec"] = round(time.time() - started, 4)
-		state = {**state, "execution_result": result}
-		state = _add_log(state, "execute_code_node: done")
-		return state
-	except Exception as e:
-		state = {**state, "execution_result": {"error": str(e)}}
-		state = _add_log(state, f"execute_code_node: error: {e}")
-		return state
-
-
-def log_node_factory(db_path: Path):
-	def _log_node(state: HITLState) -> HITLState:
-		state = _add_log(state, "log_node: started")
-		try:
-			insert_log(db_path, state)
-			state = _add_log(state, "log_node: stored")
-		except Exception as e:
-			state = _add_log(state, f"log_node: failed: {e}")
-		return state
-
-	return _log_node
-
-
-def build_graph(db_path: Optional[Path] = None) -> GraphArtifacts:
-	base_dir = Path(__file__).parent
-	db_path = db_path or (base_dir / "logs.db")
-
-	builder = StateGraph(HITLState)
-	builder.add_node("generate_code", generate_code_node)
-	builder.add_node("human_approval", human_approval_node)
-	builder.add_node("execute_code", execute_code_node)
-	builder.add_node("log", log_node_factory(db_path))
-
-	builder.add_edge(START, "generate_code")
-	builder.add_edge("generate_code", "human_approval")
-	builder.add_edge("human_approval", "execute_code")
-	builder.add_edge("execute_code", "log")
-	builder.add_edge("log", END)
-
-	checkpointer = MemorySaver()
-	# Interrupt BEFORE executing code to enforce Human-in-the-loop.
-	graph = builder.compile(checkpointer=checkpointer, interrupt_before=["execute_code"])
-
-	return GraphArtifacts(graph=graph, checkpointer=checkpointer, db_path=db_path)
-
+    graph: Any
+    checkpointer: Any
+
+
+def _gio_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _them_lich_su(
+    lich_su: Optional[List[Dict[str, Any]]],
+    role: str,
+    noi_dung: str,
+    agent: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    ds = list(lich_su or [])
+    ds.append(
+        {
+            "time": _gio_utc_iso(),
+            "role": role,
+            "agent": agent or "",
+            "content": noi_dung,
+        }
+    )
+    return ds
+
+
+def _llm() -> ChatOpenAI:
+    if not OPENAI_API_KEY:
+        raise ValueError("Thiếu OPENAI_API_KEY. Vui lòng cấu hình biến môi trường trước khi chạy.")
+    return ChatOpenAI(model=OPENAI_MODEL, api_key=OPENAI_API_KEY, temperature=0.2)
+
+
+def _bo_code_fence(text: str) -> str:
+    noi_dung = (text or "").strip()
+    if not noi_dung.startswith("```"):
+        return noi_dung
+    lines = noi_dung.splitlines()
+    if lines and lines[0].startswith("```"):
+        lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _parse_json_an_toan(text: str) -> Dict[str, Any]:
+    noi_dung = _bo_code_fence(text)
+    try:
+        return json.loads(noi_dung)
+    except Exception:
+        return {}
+
+
+def supervisor_node(state: MultiAgentState) -> MultiAgentState:
+    """Supervisor cập nhật trạng thái đầu vào trước khi định tuyến."""
+    cap_nhat: MultiAgentState = {}
+    if not state.get("status"):
+        cap_nhat["status"] = "received_request"
+    if state.get("user_request"):
+        lich_su = state.get("chat_history", [])
+        cuoi = lich_su[-1] if lich_su else {}
+        if not (cuoi.get("role") == "user" and cuoi.get("content") == state.get("user_request", "")):
+            cap_nhat["chat_history"] = _them_lich_su(
+                lich_su,
+                role="user",
+                noi_dung=state.get("user_request", ""),
+                agent="human",
+            )
+    return cap_nhat
+
+
+def supervisor_router(state: MultiAgentState) -> Literal["code_generator", "tool_executor", "analyst", "end"]:
+    trang_thai = (state.get("status") or "").strip()
+
+    if trang_thai in {"received_request", "new_request"} and state.get("user_request"):
+        return "code_generator"
+    if trang_thai == "pending_approval":
+        return "tool_executor"
+    if trang_thai == "execution_succeeded":
+        return "analyst"
+    if trang_thai in {"execution_failed", "completed"}:
+        return "end"
+    return "end"
+
+
+def code_generator_node(state: MultiAgentState) -> MultiAgentState:
+    """Agent sinh code: chỉ tạo code, không thực thi."""
+    user_request = (state.get("user_request") or "").strip()
+    csv_schemas = state.get("csv_schemas", {})
+
+    if not user_request:
+        return {
+            "status": "execution_failed",
+            "execution_error": "Không có yêu cầu người dùng để sinh code.",
+            "chat_history": _them_lich_su(
+                state.get("chat_history"),
+                role="assistant",
+                agent="code_generator",
+                noi_dung="Thiếu yêu cầu phân tích. Vui lòng nhập `user_request` rõ ràng hơn.",
+            ),
+        }
+
+    he_thong = SystemMessage(
+        content=(
+            "Bạn là Code Generator Agent cho bài toán phân tích dữ liệu.\n"
+            "Nhiệm vụ: sinh code Python dùng pandas/matplotlib thật chuẩn theo yêu cầu.\n"
+            "Ràng buộc bắt buộc:\n"
+            "- CHỈ sinh code, tuyệt đối không thực thi code.\n"
+            "- Trả về đúng JSON có khóa: generated_code, note.\n"
+            "- generated_code phải là code chạy được ngay.\n"
+            "- Mọi giải thích nằm trong comment tiếng Việt trong code.\n"
+            "- Không dùng import, không đọc mạng, không gọi shell.\n"
+            "- Dữ liệu đầu vào khả dụng trong runtime:\n"
+            "  * csv_tables: dict[str, pandas.DataFrame]\n"
+            "  * df: pandas.DataFrame (bảng mặc định)\n"
+            "- Code bắt buộc tạo biến result dạng dict có khóa:\n"
+            "  * summary: str\n"
+            "  * tables: list\n"
+            "  * figures: list (để trống nếu không dùng)\n"
+            "- Nếu thiếu cột quan trọng, raise ValueError với thông điệp tiếng Việt rõ ràng."
+        )
+    )
+    nguoi_dung = HumanMessage(
+        content=(
+            "Sinh code phân tích dữ liệu dựa trên yêu cầu và ngữ cảnh schema sau.\n\n"
+            f"YÊU CẦU:\n{user_request}\n\n"
+            f"CSV_SCHEMAS_CONTEXT:\n{json.dumps(csv_schemas, ensure_ascii=False, default=str)}"
+        )
+    )
+
+    llm = _llm()
+    phan_hoi = llm.invoke([he_thong, nguoi_dung])
+    noi_dung = phan_hoi.content if isinstance(phan_hoi.content, str) else str(phan_hoi.content)
+    parsed = _parse_json_an_toan(noi_dung)
+
+    generated_code = str(parsed.get("generated_code") or "").strip()
+    note = str(parsed.get("note") or "").strip()
+    if not generated_code:
+        generated_code = _bo_code_fence(noi_dung)
+        note = note or "Mô hình không trả JSON chuẩn, đã dùng nội dung thô."
+
+    lich_su = _them_lich_su(
+        state.get("chat_history"),
+        role="assistant",
+        agent="code_generator",
+        noi_dung="Đã sinh code. Vui lòng kiểm duyệt rồi gửi `approved_code` để chạy.",
+    )
+
+    return {
+        "generated_code": generated_code,
+        "status": "pending_approval",
+        "execution_error": "",
+        "insights": "",
+        "chat_history": lich_su,
+        "execution_result": {},
+        "approved_code": state.get("approved_code", ""),
+        "user_request": user_request,
+        "csv_schemas": csv_schemas,
+        "session_id": state.get("session_id", ""),
+        "note": note,
+    }
+
+
+def _ma_hoa_figure(fig: plt.Figure) -> str:
+    bo_nho = io.BytesIO()
+    fig.savefig(bo_nho, format="png", bbox_inches="tight", dpi=160)
+    bo_nho.seek(0)
+    return base64.b64encode(bo_nho.read()).decode("utf-8")
+
+
+def _xac_thuc_code(code: str) -> None:
+    """Kiểm tra AST để chặn các thao tác nguy hiểm rõ ràng."""
+    cay = ast.parse(code)
+    ten_cam = {
+        "open",
+        "exec",
+        "eval",
+        "compile",
+        "__import__",
+        "input",
+        "globals",
+        "locals",
+        "vars",
+        "help",
+        "breakpoint",
+    }
+    module_cam = {
+        "os",
+        "sys",
+        "subprocess",
+        "socket",
+        "pathlib",
+        "importlib",
+        "builtins",
+        "shutil",
+    }
+
+    for node in ast.walk(cay):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            raise ValueError("Không cho phép dùng import trong approved_code.")
+        if isinstance(node, ast.Name) and node.id in ten_cam:
+            raise ValueError(f"Không cho phép dùng `{node.id}` trong approved_code.")
+        if isinstance(node, ast.Name) and node.id in module_cam:
+            raise ValueError(f"Không cho phép truy cập module `{node.id}`.")
+        if isinstance(node, ast.Attribute) and str(node.attr).startswith("__"):
+            raise ValueError("Không cho phép truy cập dunder attribute.")
+
+
+def _chuan_hoa_bang(obj: Any) -> Dict[str, Any]:
+    if isinstance(obj, pd.DataFrame):
+        return {
+            "type": "dataframe",
+            "columns": [str(c) for c in obj.columns],
+            "data": obj.head(200).to_dict(orient="records"),
+        }
+    if isinstance(obj, pd.Series):
+        return {
+            "type": "series",
+            "name": str(obj.name),
+            "data": obj.head(200).to_dict(),
+        }
+    if isinstance(obj, dict):
+        return {"type": "dict", "data": obj}
+    if isinstance(obj, list):
+        return {"type": "list", "data": obj}
+    return {"type": "text", "data": str(obj)}
+
+
+def _thuc_thi_an_toan(code: str, csv_schemas: Any) -> Dict[str, Any]:
+    """Thực thi code đã duyệt trong môi trường giới hạn."""
+    _xac_thuc_code(code)
+
+    tables_tho = csv_schemas if isinstance(csv_schemas, dict) else {}
+    bang_df: Dict[str, pd.DataFrame] = {}
+    for ten_bang, gia_tri in tables_tho.items():
+        if isinstance(gia_tri, pd.DataFrame):
+            bang_df[str(ten_bang)] = gia_tri.copy()
+            continue
+        if isinstance(gia_tri, dict):
+            if isinstance(gia_tri.get("dataframe"), list):
+                bang_df[str(ten_bang)] = pd.DataFrame(gia_tri["dataframe"])
+                continue
+            if isinstance(gia_tri.get("rows"), list):
+                bang_df[str(ten_bang)] = pd.DataFrame(gia_tri["rows"])
+                continue
+            if isinstance(gia_tri.get("sample"), list):
+                bang_df[str(ten_bang)] = pd.DataFrame(gia_tri["sample"])
+                continue
+        if isinstance(gia_tri, list):
+            bang_df[str(ten_bang)] = pd.DataFrame(gia_tri)
+
+    df_mac_dinh = next(iter(bang_df.values()), pd.DataFrame())
+
+    allowed_builtins = {
+        "print": print,
+        "Exception": Exception,
+        "ValueError": ValueError,
+        "RuntimeError": RuntimeError,
+        "len": len,
+        "range": range,
+        "min": min,
+        "max": max,
+        "sum": sum,
+        "sorted": sorted,
+        "enumerate": enumerate,
+        "isinstance": isinstance,
+        "list": list,
+        "dict": dict,
+        "set": set,
+        "tuple": tuple,
+        "str": str,
+        "int": int,
+        "float": float,
+        "abs": abs,
+        "round": round,
+        "zip": zip,
+        "any": any,
+        "all": all,
+    }
+
+    globals_exec: Dict[str, Any] = {
+        "__builtins__": allowed_builtins,
+        "pd": pd,
+        "plt": plt,
+        "csv_tables": bang_df,
+        "df": df_mac_dinh,
+    }
+    locals_exec: Dict[str, Any] = {}
+
+    stdout_buffer = io.StringIO()
+    fig_truoc = set(plt.get_fignums())
+    try:
+        with redirect_stdout(stdout_buffer):
+            exec(code, globals_exec, locals_exec)
+    finally:
+        fig_sau = [n for n in plt.get_fignums() if n not in fig_truoc]
+        charts = []
+        for so in fig_sau:
+            fig = plt.figure(so)
+            charts.append(_ma_hoa_figure(fig))
+        plt.close("all")
+
+    ket_qua = locals_exec.get("result", globals_exec.get("result"))
+    if not isinstance(ket_qua, dict):
+        ket_qua = {
+            "summary": "Code không tạo biến `result` dạng dict, hệ thống dùng kết quả mặc định.",
+            "tables": [],
+            "figures": [],
+        }
+
+    bang_kq: List[Dict[str, Any]] = []
+    for item in ket_qua.get("tables", []) if isinstance(ket_qua.get("tables"), list) else []:
+        bang_kq.append(_chuan_hoa_bang(item))
+
+    return {
+        "summary": str(ket_qua.get("summary", "")),
+        "stdout": stdout_buffer.getvalue(),
+        "tables": bang_kq,
+        "charts_base64": charts,
+        "executed_at": _gio_utc_iso(),
+    }
+
+
+def tool_executor_node(state: MultiAgentState) -> MultiAgentState:
+    """Agent thực thi code đã được phê duyệt bởi con người."""
+    approved_code = (state.get("approved_code") or "").strip()
+    if not approved_code:
+        loi = (
+            "Thiếu `approved_code`, chưa thể chạy.\n"
+            "Vui lòng gửi lại mã đã duyệt ở endpoint `/api/ai/execute`."
+        )
+        return {
+            "status": "execution_failed",
+            "execution_error": loi,
+            "chat_history": _them_lich_su(
+                state.get("chat_history"),
+                role="assistant",
+                agent="tool_executor",
+                noi_dung=loi,
+            ),
+        }
+
+    try:
+        ket_qua = _thuc_thi_an_toan(approved_code, state.get("csv_schemas"))
+        return {
+            "status": "execution_succeeded",
+            "execution_result": ket_qua,
+            "execution_error": "",
+            "chat_history": _them_lich_su(
+                state.get("chat_history"),
+                role="assistant",
+                agent="tool_executor",
+                noi_dung="Thực thi code thành công. Đang chuyển cho Analyst Agent tổng hợp insight.",
+            ),
+        }
+    except Exception:
+        tb = traceback.format_exc()
+        loi = (
+            "Thực thi code thất bại.\n"
+            "Vui lòng tinh chỉnh lại prompt hoặc chỉnh sửa code trước khi chạy lại.\n\n"
+            f"Chi tiết lỗi:\n{tb}"
+        )
+        return {
+            "status": "execution_failed",
+            "execution_result": {},
+            "execution_error": loi,
+            "chat_history": _them_lich_su(
+                state.get("chat_history"),
+                role="assistant",
+                agent="tool_executor",
+                noi_dung="Code chạy lỗi. Bạn có thể mô tả lại yêu cầu chi tiết hơn để hệ thống sinh code tốt hơn.",
+            ),
+        }
+
+
+def _rut_gon_ket_qua_cho_analyst(execution_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Rút gọn payload trước khi gửi cho LLM để tránh quá dài."""
+    if not isinstance(execution_result, dict):
+        return {}
+
+    tables_rut_gon: List[Dict[str, Any]] = []
+    for bang in execution_result.get("tables", []) if isinstance(execution_result.get("tables"), list) else []:
+        if isinstance(bang, dict):
+            data = bang.get("data")
+            if isinstance(data, list):
+                data = data[:20]
+            tables_rut_gon.append(
+                {
+                    "type": bang.get("type"),
+                    "columns": bang.get("columns"),
+                    "data": data,
+                }
+            )
+
+    return {
+        "summary": execution_result.get("summary", ""),
+        "stdout": execution_result.get("stdout", "")[:4000],
+        "tables": tables_rut_gon,
+        "chart_count": len(execution_result.get("charts_base64", []) or []),
+    }
+
+
+def analyst_node(state: MultiAgentState) -> MultiAgentState:
+    """Agent phân tích kết quả đã chạy và sinh insight kinh doanh."""
+    execution_result = state.get("execution_result", {})
+    if not isinstance(execution_result, dict) or not execution_result:
+        thong_diep = "Không có dữ liệu đầu ra để phân tích insight."
+        return {
+            "status": "completed",
+            "insights": thong_diep,
+            "chat_history": _them_lich_su(
+                state.get("chat_history"),
+                role="assistant",
+                agent="analyst",
+                noi_dung=thong_diep,
+            ),
+        }
+
+    tom_tat = _rut_gon_ket_qua_cho_analyst(execution_result)
+
+    try:
+        llm = _llm()
+        he_thong = SystemMessage(
+            content=(
+                "Bạn là Analyst Agent chuyên phân tích kết quả data analytics cho business.\n"
+                "Hãy tạo insight ngắn gọn, có hành động đề xuất, viết tiếng Việt.\n"
+                "Ưu tiên nêu: xu hướng chính, bất thường, và khuyến nghị tiếp theo."
+            )
+        )
+        nguoi_dung = HumanMessage(
+            content=(
+                f"YÊU CẦU GỐC:\n{state.get('user_request', '')}\n\n"
+                f"KẾT QUẢ THỰC THI:\n{json.dumps(tom_tat, ensure_ascii=False, default=str)}"
+            )
+        )
+        phan_hoi = llm.invoke([he_thong, nguoi_dung])
+        insights = phan_hoi.content if isinstance(phan_hoi.content, str) else str(phan_hoi.content)
+        insights = insights.strip() or "Không sinh được insight từ kết quả hiện tại."
+    except Exception:
+        insights = (
+            "Đã chạy xong code nhưng chưa thể gọi Analyst Agent để tổng hợp insight.\n"
+            "Bạn có thể dựa trên summary/table/chart để đánh giá thủ công."
+        )
+
+    return {
+        "status": "completed",
+        "insights": insights,
+        "chat_history": _them_lich_su(
+            state.get("chat_history"),
+            role="assistant",
+            agent="analyst",
+            noi_dung=insights,
+        ),
+    }
+
+
+def build_graph() -> GraphArtifacts:
+    builder = StateGraph(MultiAgentState)
+    builder.add_node("supervisor", supervisor_node)
+    builder.add_node("code_generator", code_generator_node)
+    builder.add_node("tool_executor", tool_executor_node)
+    builder.add_node("analyst", analyst_node)
+
+    builder.add_edge(START, "supervisor")
+    builder.add_conditional_edges(
+        "supervisor",
+        supervisor_router,
+        {
+            "code_generator": "code_generator",
+            "tool_executor": "tool_executor",
+            "analyst": "analyst",
+            "end": END,
+        },
+    )
+    builder.add_edge("code_generator", "supervisor")
+    builder.add_edge("tool_executor", "supervisor")
+    builder.add_edge("analyst", END)
+
+    checkpointer = MemorySaver()
+    graph = builder.compile(checkpointer=checkpointer, interrupt_before=["tool_executor"])
+    return GraphArtifacts(graph=graph, checkpointer=checkpointer)

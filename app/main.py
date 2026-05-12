@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
-import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -10,153 +10,199 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 try:
-	# Preferred when running from repo root/Week02: `uvicorn app.main:app`
-	from .graph import build_graph, fetch_logs, chat_answer
+    # Chạy bằng `uvicorn app.main:app`
+    from .graph import build_graph
 except Exception:  # pragma: no cover
-	# Fallback when running from inside this folder: `uvicorn main:app`
-	from graph import build_graph, fetch_logs, chat_answer
+    # Chạy khi đứng trong thư mục `app`: `uvicorn main:app`
+    from graph import build_graph
 
 
 load_dotenv()
 
 
-app = FastAPI(title="HITL Data Analysis API", version="0.1.0")
+app = FastAPI(title="HITL Multi-Agent Backend", version="1.0.0")
 
-# Streamlit will typically run on another port; allow localhost usage.
 app.add_middleware(
-	CORSMiddleware,
-	allow_origins=["*"],
-	allow_credentials=True,
-	allow_methods=["*"] ,
-	allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
 artifacts = build_graph()
 graph = artifacts.graph
-DB_PATH = artifacts.db_path
 
 
-def _mk_config(thread_id: str) -> Dict[str, Any]:
-	return {"configurable": {"thread_id": thread_id}}
+def _config(session_id: str) -> Dict[str, Any]:
+    return {"configurable": {"thread_id": session_id}}
 
 
-class GenerateRequest(BaseModel):
-	user_request: str = Field(..., min_length=1)
-	context: Dict[str, Any] = Field(default_factory=dict)
-	thread_id: Optional[str] = None
+def _chuan_hoa_csv_context(csv_schemas_context: Any) -> Any:
+    """Chuẩn hóa csv context từ frontend về dạng dict/list/text."""
+    if isinstance(csv_schemas_context, (dict, list)):
+        return csv_schemas_context
+    if isinstance(csv_schemas_context, str):
+        text = csv_schemas_context.strip()
+        if not text:
+            return {}
+        try:
+            return json.loads(text)
+        except Exception:
+            return {"raw_text": text}
+    return {}
 
 
-class GenerateResponse(BaseModel):
-	thread_id: str
-	status: str
-	generated_code: str
-	explanation: str
-å
-
-class ExecuteRequest(BaseModel):
-	thread_id: str = Field(..., min_length=1)
-	approved_code: str = Field(..., min_length=1)
-
-
-class ExecuteResponse(BaseModel):
-	thread_id: str
-	status: str
-	execution_result: Dict[str, Any]
-	logs: list[str] = Field(default_factory=list)
+def _snapshot_to_dict(snapshot: Any) -> Dict[str, Any]:
+    return {
+        "values": getattr(snapshot, "values", {}) or {},
+        "next": list(getattr(snapshot, "next", ()) or ()),
+        "metadata": getattr(snapshot, "metadata", None),
+        "created_at": getattr(snapshot, "created_at", None),
+        "config": getattr(snapshot, "config", None),
+        "parent_config": getattr(snapshot, "parent_config", None),
+    }
 
 
 class ChatRequest(BaseModel):
-	message: str = Field(..., min_length=1)
-	context: Dict[str, Any] = Field(default_factory=dict)
+    session_id: str = Field(..., min_length=1, description="Mã phiên làm việc")
+    user_request: str = Field(..., min_length=1, description="Yêu cầu phân tích từ người dùng")
+    csv_schemas_context: Union[Dict[str, Any], List[Dict[str, Any]], str, Any] = Field(
+        default_factory=dict,
+        description="Ngữ cảnh schema CSV dạng thô",
+    )
 
 
 class ChatResponse(BaseModel):
-	answer: str
+    session_id: str
+    status: str
+    generated_code: str
+    execution_error: str = ""
+    chat_history: List[Dict[str, Any]] = Field(default_factory=list)
 
 
-@app.post("/api/ai/generate", response_model=GenerateResponse)
-def generate(req: GenerateRequest) -> GenerateResponse:
-	thread_id = req.thread_id or f"thread-{uuid.uuid4().hex[:10]}"
-	config = _mk_config(thread_id)
-
-	try:
-		# Runs until it hits the interrupt before `execute_code`.
-		state = graph.invoke(
-			{
-				"thread_id": thread_id,
-				"user_request": req.user_request,
-				"context": req.context,
-				"logs": [],
-			},
-			config=config,
-		)
-	except Exception as e:
-		raise HTTPException(status_code=500, detail=str(e))
-
-	return GenerateResponse(
-		thread_id=thread_id,
-		status="pending_approval",
-		generated_code=state.get("generated_code", ""),
-		explanation=state.get("explanation", ""),
-	)
+class ExecuteRequest(BaseModel):
+    session_id: str = Field(..., min_length=1)
+    approved_code: str = Field(..., min_length=1)
 
 
-@app.post("/api/ai/execute", response_model=ExecuteResponse)
-def execute(req: ExecuteRequest) -> ExecuteResponse:
-	config = _mk_config(req.thread_id)
-
-	try:
-		snap = graph.get_state(config)
-		if not getattr(snap, "next", None):
-			raise HTTPException(
-				status_code=400,
-				detail="Unknown thread_id or no pending approval state. Call POST /api/ai/generate first.",
-			)
-		if tuple(snap.next) != ("execute_code",):
-			raise HTTPException(
-				status_code=400,
-				detail=f"Thread is not waiting for approval (next={snap.next}). Call POST /api/ai/generate first.",
-			)
-		ctx = (getattr(snap, "values", {}) or {}).get("context", {})
-		if not isinstance(ctx, dict):
-			raise HTTPException(status_code=400, detail="Stored context is invalid. Provide context in POST /api/ai/generate.")
-		if not (ctx.get("csv_path") or (ctx.get("raw_dir") and ctx.get("tables"))):
-			raise HTTPException(
-				status_code=400,
-				detail="Missing execution context in stored state. Provide either context.csv_path OR context.raw_dir + context.tables in POST /api/ai/generate.",
-			)
-
-		# HITL requirement: update the stored state with user-approved code, then resume execution.
-		graph.update_state(config, {"approved_code": req.approved_code})
-		state = graph.invoke(None, config=config)
-	except Exception as e:
-		raise HTTPException(status_code=500, detail=str(e))
-
-	return ExecuteResponse(
-		thread_id=req.thread_id,
-		status="executed",
-		execution_result=state.get("execution_result", {}) or {},
-		logs=state.get("logs", []) or [],
-	)
+class ExecuteResponse(BaseModel):
+    session_id: str
+    status: str
+    execution_result: Dict[str, Any] = Field(default_factory=dict)
+    execution_error: str = ""
+    insights: str = ""
+    chat_history: List[Dict[str, Any]] = Field(default_factory=list)
 
 
-@app.get("/api/logs")
-def get_logs(limit: int = 100):
-	limit = max(1, min(int(limit), 500))
-	return {"items": fetch_logs(DB_PATH, limit=limit)}
+class SessionResponse(BaseModel):
+    session_id: str
+    state: Dict[str, Any]
+    history: List[Dict[str, Any]]
 
 
 @app.post("/api/ai/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
-	try:
-		answer = chat_answer(req.message, req.context)
-		return ChatResponse(answer=answer)
-	except Exception as e:
-		raise HTTPException(status_code=500, detail=str(e))
+def ai_chat(req: ChatRequest) -> ChatResponse:
+    session_id = req.session_id.strip()
+    config = _config(session_id)
+    csv_context = _chuan_hoa_csv_context(req.csv_schemas_context)
+
+    try:
+        # Khởi chạy graph đến điểm dừng phê duyệt (interrupt_before tool_executor).
+        graph.invoke(
+            {
+                "session_id": session_id,
+                "user_request": req.user_request.strip(),
+                "csv_schemas": csv_context,
+                "status": "received_request",
+            },
+            config=config,
+        )
+        snapshot = graph.get_state(config)
+        values = (getattr(snapshot, "values", {}) or {}) if snapshot else {}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi sinh code: {e}")
+
+    generated_code = str(values.get("generated_code", ""))
+    if not generated_code:
+        raise HTTPException(status_code=500, detail="Không nhận được generated_code từ Code Generator Agent.")
+
+    return ChatResponse(
+        session_id=session_id,
+        status=str(values.get("status", "pending_approval")),
+        generated_code=generated_code,
+        execution_error=str(values.get("execution_error", "")),
+        chat_history=values.get("chat_history", []) or [],
+    )
+
+
+@app.post("/api/ai/execute", response_model=ExecuteResponse)
+def ai_execute(req: ExecuteRequest) -> ExecuteResponse:
+    session_id = req.session_id.strip()
+    config = _config(session_id)
+
+    try:
+        snapshot = graph.get_state(config)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy phiên. Hãy gọi /api/ai/chat trước.")
+
+        hien_tai = getattr(snapshot, "values", {}) or {}
+        if str(hien_tai.get("status", "")) != "pending_approval":
+            raise HTTPException(
+                status_code=400,
+                detail="Phiên hiện không ở trạng thái chờ duyệt code (`pending_approval`).",
+            )
+
+        graph.update_state(config, {"approved_code": req.approved_code.strip()})
+        graph.invoke(None, config=config)
+        sau_khi_chay = graph.get_state(config)
+        values = (getattr(sau_khi_chay, "values", {}) or {}) if sau_khi_chay else {}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi thực thi code: {e}")
+
+    return ExecuteResponse(
+        session_id=session_id,
+        status=str(values.get("status", "")),
+        execution_result=values.get("execution_result", {}) or {},
+        execution_error=str(values.get("execution_error", "")),
+        insights=str(values.get("insights", "")),
+        chat_history=values.get("chat_history", []) or [],
+    )
+
+
+@app.get("/api/sessions/{session_id}", response_model=SessionResponse)
+def get_session(session_id: str) -> SessionResponse:
+    sid = session_id.strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id không hợp lệ.")
+
+    config = _config(sid)
+    try:
+        snapshot = graph.get_state(config)
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="Không tìm thấy phiên.")
+
+        lich_su = []
+        for item in graph.get_state_history(config):
+            lich_su.append(_snapshot_to_dict(item))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi lấy thông tin phiên: {e}")
+
+    return SessionResponse(
+        session_id=sid,
+        state=_snapshot_to_dict(snapshot),
+        history=lich_su,
+    )
 
 
 @app.get("/health")
-def health():
-	return {"ok": True, "model": os.getenv("OPENAI_MODEL", "")}
-
+def health() -> Dict[str, str]:
+    return {
+        "ok": "true",
+        "model": os.getenv("OPENAI_MODEL", ""),
+    }
