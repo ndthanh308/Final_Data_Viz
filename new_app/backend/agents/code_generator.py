@@ -27,6 +27,8 @@ DOMAIN_RECIPES = """
 - Biểu đồ Time Series: resample theo 'ME' (Month End) và tính tổng để vẽ line chart gồm Revenue, COGS, Gross Profit.
 
 2. MẢNG BẤT ĐỘNG SẢN (Có các cột price, area, ppm2, district, legal...):
+- Xử lý giá trị: Cột 'price' thường có NaN. Hãy dùng `fillna(0)` trước khi aggregation.
+- Top N: Sau khi `value_counts()` hoặc `groupby`, hãy đảm bảo kết quả không chứa NaN trước khi đưa vào `result['tables']`.
 - Bước 1 (Tổng quan): Lấy shape, mô tả cơ bản (giá max/min, diện tích max/min). Chú ý: Cột 'price' thường tính bằng Tỷ VNĐ.
 - Bước 2 (Phân tích khu vực): Groupby 'district' -> size() -> Lấy Top N lớn nhất -> Vẽ Bar chart.
 - Bước 3 (Phân tích đơn giá): Groupby 'district' lấy mean của 'ppm2'. Vẽ Boxplot hoặc Bar chart để so sánh đơn giá giữa các quận trung tâm và ven.
@@ -56,12 +58,14 @@ def extract_json_from_text(text: Any) -> dict:
     if start_idx != -1 and end_idx != -1 and start_idx <= end_idx:
         json_str = text[start_idx:end_idx+1]
         try:
-            import json
             return json.loads(json_str)
-        except Exception:
-            pass
+        except json.JSONDecodeError as e:
+            # ✅ Log error thay vì im lặng
+            print(f"⚠️ JSON parse failed: {e}\nRaw: {json_str[:200]}")
             
-    return {}
+    # ❌ Fallback này không an toàn - return {} sẽ dẫn đến code trống
+    # Nên raise exception thay vì return {}
+    raise ValueError(f"Cannot extract JSON from response: {text[:500]}")
 
 def validate_generated_code(code: str) -> List[str]:
     errors: List[str] = []
@@ -137,8 +141,9 @@ def generate_code(llm: ChatOpenAI, user_request: str, schemas: dict, max_repair_
         
         # Lấy code ra, nếu không parse được JSON thì dùng fallback quét Markdown code block
         generated_code = parsed_data.get("generated_code", "")
-        if not generated_code:
-            generated_code = strip_code_fence(raw_content)
+        if not generated_code or not generated_code.strip():
+            error_text = "LLM không sinh code hợp lệ. Response: " + raw_content[:200]
+            raise ValueError(error_text)
             
     except Exception as e:
         return f"result = {{\n    'summary': 'Lỗi kết nối LLM: {str(e)}',\n    'tables': [],\n    'figures': [],\n    'used_tables': []\n}}"

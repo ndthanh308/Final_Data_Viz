@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import json
+import math
 import os
 import uuid
 from pathlib import Path
@@ -70,8 +72,20 @@ def _build_context(raw_dir: Path, selected_tables: List[str], default_table: str
 	}
 
 
+def _sanitize_for_json(obj: Any) -> Any:
+	"""Recursively replace NaN/Inf floats with None so json.dumps succeeds."""
+	if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+		return None
+	if isinstance(obj, dict):
+		return {k: _sanitize_for_json(v) for k, v in obj.items()}
+	if isinstance(obj, (list, tuple)):
+		return [_sanitize_for_json(v) for v in obj]
+	return obj
+
+
 def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-	resp = requests.post(url, json=payload, timeout=180)
+	clean = _sanitize_for_json(payload)
+	resp = requests.post(url, json=clean, timeout=180)
 	resp.raise_for_status()
 	return resp.json()
 
@@ -189,7 +203,7 @@ def _call_chat(prompt: str, ctx: Dict[str, Any]) -> None:
 	_queue_generated_code(st.session_state, data.get("generated_code", ""))
 	st.session_state.insights = data.get("insights", "")
 	st.session_state.execution_error = data.get("execution_error", "")
-    
+	
 	# ====== THÊM DÒNG NÀY ĐỂ FIX LỖI HIỂN THỊ ======
 	st.session_state.execution_result = {} 
 	# ===============================================
@@ -199,34 +213,21 @@ def _call_chat(prompt: str, ctx: Dict[str, Any]) -> None:
 
 
 def _call_execute() -> None:
-    payload = {
-        "session_id": st.session_state.session_id,
-        "approved_code": st.session_state.approved_code,
-    }
-    data = _post_json(f"{API_BASE}/api/ai/execute", payload)
-    
-    # Lưu kết quả vào state hiện tại
-    st.session_state.execution_result = data.get("execution_result", {})
-    st.session_state.insights = data.get("insights", "")
-    
-    # Cập nhật chat_history từ backend (thường chứa các text phản hồi)
-    st.session_state.chat_history = data.get("chat_history", [])
-    
-    # QUAN TRỌNG: Đính kèm execution_result vào tin nhắn cuối cùng để render lại sau này
-    if st.session_state.chat_history and st.session_state.execution_result:
-        st.session_state.chat_history[-1]["execution_result"] = st.session_state.execution_result
+	payload = {
+		"session_id": st.session_state.session_id,
+		"approved_code": st.session_state.approved_code,
+	}
+	data = _post_json(f"{API_BASE}/api/ai/execute", payload)
+	st.session_state.execution_result = data.get("execution_result", {})
+	st.session_state.execution_error = data.get("execution_error", "")
+	st.session_state.insights = data.get("insights", "")
+	st.session_state.chat_history = data.get("chat_history", [])
 
 def _render_chat_history() -> None:
-    for m in st.session_state.chat_history:
-        role = m.get("role", "assistant")
-        with st.chat_message(role):
-            # 1. Hiển thị văn bản tin nhắn
-            st.write(m.get("content", ""))
-            
-            # 2. Nếu tin nhắn này có chứa kết quả thực thi (biểu đồ/bảng) thì vẽ nó ra
-            if "execution_result" in m:
-                _render_execution_result(m["execution_result"])
-
+	for m in st.session_state.chat_history:
+		role = m.get("role", "assistant")
+		with st.chat_message(role):
+			st.write(m.get("content", ""))
 
 def _render_code_message() -> None:
 	if not st.session_state.generated_code and not st.session_state.approved_code:
