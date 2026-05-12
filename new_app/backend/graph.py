@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
@@ -31,7 +32,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 OPENAI_CODE_MODEL = os.getenv("OPENAI_CODE_MODEL", OPENAI_MODEL)
-
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
 class AgentState(TypedDict, total=False):
 	session_id: str
@@ -58,13 +59,27 @@ class GraphArtifacts:
 def get_llm() -> ChatOpenAI:
 	if not OPENAI_API_KEY:
 		raise ValueError("Thiếu OPENAI_API_KEY trong biến môi trường")
-	return ChatOpenAI(model=OPENAI_MODEL, api_key=OPENAI_API_KEY, temperature=0.2)
+	# return ChatOpenAI(model=OPENAI_MODEL, api_key=OPENAI_API_KEY, temperature=0.2)
+	# return ChatOpenAI(model="inclusionai/ring-2.6-1t:free", base_url="https://openrouter.ai/api/v1", api_key=OPENAI_API_KEY, temperature=0.2)
+	return ChatGoogleGenerativeAI(
+		model="gemini-2.5-flash",
+		temperature=0,
+		api_key=GOOGLE_API_KEY,
+		max_retries=0,
+	)
 
 
 def get_code_llm() -> ChatOpenAI:
 	if not OPENAI_API_KEY:
 		raise ValueError("Thiếu OPENAI_API_KEY trong biến môi trường")
-	return ChatOpenAI(model=OPENAI_CODE_MODEL, api_key=OPENAI_API_KEY, temperature=0)
+	# return ChatOpenAI(model=OPENAI_CODE_MODEL, api_key=OPENAI_API_KEY, temperature=0)
+	# return ChatOpenAI(model="inclusionai/ring-2.6-1t:free", base_url="https://openrouter.ai/api/v1", api_key=OPENAI_API_KEY, temperature=0.2)
+	return ChatGoogleGenerativeAI(
+		model="gemini-2.5-flash",
+		temperature=0,
+		api_key=GOOGLE_API_KEY,
+		max_retries=0,
+	)
 
 
 def _append_history(state: AgentState, role: str, content: str) -> AgentState:

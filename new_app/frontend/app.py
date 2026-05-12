@@ -162,6 +162,21 @@ def _apply_pending_code_editor(state: Dict[str, Any]) -> None:
 	state["pending_code_editor"] = None
 
 
+# def _call_chat(prompt: str, ctx: Dict[str, Any]) -> None:
+# 	payload = {
+# 		"session_id": st.session_state.session_id,
+# 		"user_request": prompt,
+# 		"uploaded_files": ctx,
+# 	}
+# 	data = _post_json(f"{API_BASE}/api/ai/chat", payload)
+# 	st.session_state.session_id = data.get("session_id", st.session_state.session_id)
+# 	st.session_state.chat_history = data.get("chat_history", [])
+# 	_queue_generated_code(st.session_state, data.get("generated_code", ""))
+# 	st.session_state.insights = data.get("insights", "")
+# 	st.session_state.execution_error = data.get("execution_error", "")
+# 	if st.session_state.session_id not in st.session_state.session_list:
+# 		st.session_state.session_list.append(st.session_state.session_id)
+
 def _call_chat(prompt: str, ctx: Dict[str, Any]) -> None:
 	payload = {
 		"session_id": st.session_state.session_id,
@@ -174,27 +189,43 @@ def _call_chat(prompt: str, ctx: Dict[str, Any]) -> None:
 	_queue_generated_code(st.session_state, data.get("generated_code", ""))
 	st.session_state.insights = data.get("insights", "")
 	st.session_state.execution_error = data.get("execution_error", "")
+    
+	# ====== THÊM DÒNG NÀY ĐỂ FIX LỖI HIỂN THỊ ======
+	st.session_state.execution_result = {} 
+	# ===============================================
+
 	if st.session_state.session_id not in st.session_state.session_list:
 		st.session_state.session_list.append(st.session_state.session_id)
 
 
 def _call_execute() -> None:
-	payload = {
-		"session_id": st.session_state.session_id,
-		"approved_code": st.session_state.approved_code,
-	}
-	data = _post_json(f"{API_BASE}/api/ai/execute", payload)
-	st.session_state.execution_result = data.get("execution_result", {})
-	st.session_state.execution_error = data.get("execution_error", "")
-	st.session_state.insights = data.get("insights", "")
-	st.session_state.chat_history = data.get("chat_history", [])
-
+    payload = {
+        "session_id": st.session_state.session_id,
+        "approved_code": st.session_state.approved_code,
+    }
+    data = _post_json(f"{API_BASE}/api/ai/execute", payload)
+    
+    # Lưu kết quả vào state hiện tại
+    st.session_state.execution_result = data.get("execution_result", {})
+    st.session_state.insights = data.get("insights", "")
+    
+    # Cập nhật chat_history từ backend (thường chứa các text phản hồi)
+    st.session_state.chat_history = data.get("chat_history", [])
+    
+    # QUAN TRỌNG: Đính kèm execution_result vào tin nhắn cuối cùng để render lại sau này
+    if st.session_state.chat_history and st.session_state.execution_result:
+        st.session_state.chat_history[-1]["execution_result"] = st.session_state.execution_result
 
 def _render_chat_history() -> None:
-	for m in st.session_state.chat_history:
-		role = m.get("role", "assistant")
-		with st.chat_message(role):
-			st.write(m.get("content", ""))
+    for m in st.session_state.chat_history:
+        role = m.get("role", "assistant")
+        with st.chat_message(role):
+            # 1. Hiển thị văn bản tin nhắn
+            st.write(m.get("content", ""))
+            
+            # 2. Nếu tin nhắn này có chứa kết quả thực thi (biểu đồ/bảng) thì vẽ nó ra
+            if "execution_result" in m:
+                _render_execution_result(m["execution_result"])
 
 
 def _render_code_message() -> None:

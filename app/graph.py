@@ -77,7 +77,7 @@ def _safe_json_loads(text: str) -> Dict[str, Any]:
 def get_llm() -> ChatOpenAI:
 	if not OPENAI_API_KEY:
 		raise ValueError("OPENAI_API_KEY is missing")
-	return ChatOpenAI(model=OPENAI_MODEL, api_key=OPENAI_API_KEY, temperature=0.2)
+	return ChatOpenAI(model="inclusionai/ring-2.6-1t:free", base_url="https://openrouter.ai/api/v1", api_key=OPENAI_API_KEY, temperature=0.2)
 
 
 def chat_answer(user_message: str, context: Optional[Dict[str, Any]] = None) -> str:

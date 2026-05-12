@@ -105,15 +105,29 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
 	history.append({"role": "user", "content": req.user_request})
 
+	# payload: Dict[str, Any] = {
+	# 	"session_id": session_id,
+	# 	"user_request": req.user_request,
+	# 	"multiple_csv_schemas": req.uploaded_files or existing.get("multiple_csv_schemas") or {},
+	# 	"generated_code": existing.get("generated_code", ""),
+	# 	"approved_code": "",
+	# 	"execution_result": existing.get("execution_result", {}),
+	# 	"execution_error": "",
+	# 	"insights": existing.get("insights", ""),
+	# 	"supervisor_response": "",
+	# 	"supervisor_observation": "",
+	# 	"next_node": "",
+	# 	"chat_history": history,
+	# }
 	payload: Dict[str, Any] = {
 		"session_id": session_id,
 		"user_request": req.user_request,
 		"multiple_csv_schemas": req.uploaded_files or existing.get("multiple_csv_schemas") or {},
-		"generated_code": existing.get("generated_code", ""),
+		"generated_code": "",      # ✅ Bắt đầu lượt mới, xoá code cũ đi
 		"approved_code": "",
-		"execution_result": existing.get("execution_result", {}),
+		"execution_result": {},    # ✅ Xoá kết quả bảng/biểu đồ cũ
 		"execution_error": "",
-		"insights": existing.get("insights", ""),
+		"insights": "",            # ✅ Xoá trắng phần "Nhận định / Gợi ý" cũ
 		"supervisor_response": "",
 		"supervisor_observation": "",
 		"next_node": "",

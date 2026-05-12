@@ -5,7 +5,8 @@ from typing import Any, Dict
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
-from backend.utils.json_utils import json_dumps, safe_json_loads
+from backend.utils.json_utils import json_dumps, safe_json_loads, ensure_string_content
+
 
 
 def summarize_execution_for_supervisor(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -73,7 +74,9 @@ def decide_next_node(
 
 	try:
 		resp = llm.invoke([sys_prompt, human])
-		parsed = safe_json_loads(resp.content or "")
+        # Làm sạch text (Xử lý lỗi list object)
+		raw_text = ensure_string_content(resp.content)
+		parsed = safe_json_loads(raw_text)
 		next_node = str(parsed.get("next_node", "")).strip()
 		if next_node not in {"code_generator", "tool_executor", "direct_answer", "end"}:
 			next_node = "code_generator"

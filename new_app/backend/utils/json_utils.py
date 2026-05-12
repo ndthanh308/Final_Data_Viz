@@ -25,6 +25,14 @@ def safe_json_loads(text: str) -> Dict[str, Any]:
 		return {}
 
 
+def ensure_string_content(content: Any) -> str:
+    """Chuyển đổi mọi định dạng đầu ra (List hoặc String) của LLM về String thuần túy."""
+    if isinstance(content, list):
+        # Gom các block text từ list của Gemini
+        return "".join(item.get("text", "") if isinstance(item, dict) else str(item) for item in content)
+    return str(content or "").strip()
+
+
 def strip_code_fence(text: str) -> str:
 	t = (text or "").strip()
 	if not t.startswith("```"):
