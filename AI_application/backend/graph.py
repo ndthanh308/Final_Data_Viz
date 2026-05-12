@@ -33,6 +33,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 OPENAI_CODE_MODEL = os.getenv("OPENAI_CODE_MODEL", OPENAI_MODEL)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+GOOGLE_MODEl = os.getenv("GOOGLE_MODEL", "gemini-2.5-flash")
 
 class AgentState(TypedDict, total=False):
 	session_id: str
@@ -62,7 +63,7 @@ def get_llm() -> ChatOpenAI:
 	# return ChatOpenAI(model=OPENAI_MODEL, api_key=OPENAI_API_KEY, temperature=0.2)
 	# return ChatOpenAI(model="inclusionai/ring-2.6-1t:free", base_url="https://openrouter.ai/api/v1", api_key=OPENAI_API_KEY, temperature=0.2)
 	return ChatGoogleGenerativeAI(
-		model="gemini-2.5-flash",
+		model= GOOGLE_MODEl,
 		temperature=0,
 		api_key=GOOGLE_API_KEY,
 		max_retries=0,
@@ -75,7 +76,7 @@ def get_code_llm() -> ChatOpenAI:
 	# return ChatOpenAI(model=OPENAI_CODE_MODEL, api_key=OPENAI_API_KEY, temperature=0)
 	# return ChatOpenAI(model="inclusionai/ring-2.6-1t:free", base_url="https://openrouter.ai/api/v1", api_key=OPENAI_API_KEY, temperature=0.2)
 	return ChatGoogleGenerativeAI(
-		model="gemini-2.5-flash",
+		model= GOOGLE_MODEl,
 		temperature=0,
 		api_key=GOOGLE_API_KEY,
 		max_retries=0,

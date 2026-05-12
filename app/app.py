@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8000")
+API_BASE = os.getenv("API_BASE", "http://127.0.0.1:8001")
 
 
 def _repo_root() -> Path:

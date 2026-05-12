@@ -1,9 +1,3 @@
-Dưới đây là phiên bản **prompt hoàn chỉnh, rõ ràng, production-ready** để bạn đưa vào GPT-5/Gemini/Claude nhằm generate toàn bộ hệ thống AI Data Analysis theo kiến trúc Multi-Agent + Human-in-the-loop.
-
----
-
-# PROMPT HOÀN CHỈNH
-
 Bạn là một Senior Python Backend Engineer chuyên sâu về:
 
 * Python

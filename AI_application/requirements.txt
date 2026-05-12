@@ -3,6 +3,7 @@ uvicorn[standard]>=0.27
 langgraph>=0.2.0
 langchain-core>=0.3.0
 langchain-openai>=0.3.0
+langchain_google_genai
 python-dotenv>=1.0
 streamlit>=1.34
 pandas>=2.0
